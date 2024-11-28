@@ -1,47 +1,40 @@
 import { Handler } from "express";
 import { GetLeadsRequestSchema } from "./schemas/LeadsRequestSchema";
-import { Prisma } from "@prisma/client";
-import { prisma } from "../database";
 import { AddLeadRequestSchema } from "./schemas/CampaignsRequestSchema";
+import { GroupsRepository } from "../repositories/GroupsRepository";
+import { LeadsRepository, LeadWhereParams } from "../repositories/LeadsRepository";
 
 export class GroupLeadsController {
+  constructor (
+    private readonly groupsRepository: GroupsRepository,
+    private readonly leadsRepository: LeadsRepository
+  ) {}
+
   getLeads: Handler = async (req, res, next) => {
     try {
       const groupId = Number(req.params.groupId)
       const query = GetLeadsRequestSchema.parse(req.query)
       const { page = "1", pageSize = "10", name, status, sortBy = "name", order = "asc"} = query
 
-      const pageNumber = Number(page)
-      const pageSizeNumber = Number(pageSize)
+      const limit = Number(pageSize)
+      const offset = (Number(page) - 1) * limit
 
-      const where: Prisma.LeadWhereInput = {
-        groups: {
-          some: { id: groupId }
-        }
-      }
+      const where: LeadWhereParams = { groupId }
 
-      if(name) where.name = { contains: name, mode: "insensitive"}
+      if(name) where.name = { like: name, mode: "insensitive"}
       if(status) where.status = status
 
-      const leads = await prisma.lead.findMany({
-        where,
-        orderBy: { [sortBy]: order },
-        skip: (pageNumber - 1) * pageSizeNumber,
-        take: pageSizeNumber,
-        include: {
-          groups: true
-        }
-      })
+      const leads = await this.leadsRepository.find({ where, sortBy, order, limit, offset, include: { groups: true, campaigns: true } })
 
-      const total = await prisma.lead.count({ where })
+      const total = await this.leadsRepository.count(where)
 
       res.json({
         leads,
         meta: {
-          page: pageNumber,
-          pageSize: pageSizeNumber,
+          page: Number(page),
+          pageSize: limit,
           total,
-          totalPages: Math.ceil(total / pageSizeNumber)
+          totalPages: Math.ceil(total / limit)
         }
       })
     } catch (error) {
@@ -51,20 +44,9 @@ export class GroupLeadsController {
   
   addLead: Handler = async (req, res, next) => {
     try {
-      const body = AddLeadRequestSchema.parse(req.body)
-      const updatedGroup = await prisma.group.update({
-        where: {
-          id: Number(req.params.groupId)
-        },
-        data: {
-          Leads: {
-            connect: { id: body.leadId }
-          }
-        },
-        include: {
-          Leads: true
-        }
-      })
+      const groupId = Number(req.params.groupId)
+      const {leadId} = AddLeadRequestSchema.parse(req.body)
+      const updatedGroup = await this.groupsRepository.addLead( groupId, leadId )
 
       res.status(201).json(updatedGroup)
     } catch (error) {
@@ -75,19 +57,9 @@ export class GroupLeadsController {
   
   removeLead: Handler = async (req, res, next) => {
     try {
-      const updatedGroup = await prisma.group.update({
-        where: {
-          id: Number(req.params.groupId)
-        },
-        data: {
-          Leads: {
-            disconnect: { id: Number(req.params.leadId)}
-          }
-        },
-        include: {
-          Leads: true
-        }
-      })
+      const groupId = Number(req.params.groupId)
+      const leadId = Number(req.params.leadId)
+      const updatedGroup = await this.groupsRepository.removeLead(groupId, leadId)
 
       res.json(updatedGroup)
     } catch (error) {
